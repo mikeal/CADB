@@ -159,7 +159,7 @@ Since hash digests ensure randomization, we use the tail of these hashes in orde
 
 If a `DIGEST` in a **leaf header** ends in Uint8 `0` it closes the leaf header.
 
-When creating **branch headers** we hash the child header and if it ends in Uint8 `0` it closes the branch header. In this case, a `TOKEN` that
+When creating **branch headers** we `SHA2-256` hash the child header and if it ends in Uint8 `0` it closes the branch header. In this case, a `TOKEN` that
 is `CLOSED` must be used for the branch. The last branch header at every layer of depth may end in with an entry for a child branch that does not
 close and must therefor use an `UNCLOSED`.
 
