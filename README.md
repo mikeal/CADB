@@ -1,32 +1,35 @@
-# CADB
+# Content Address DataBase
 
 Experimental single file content addressed database.
 
-This is a single file database for storing content addressed block data. You can think of it
-like a key/value store where the keys **MUST** be hash digests of a sufficient length.
+"Content address" means that data is keyed by a hash digest.
 
-CADB is a special B+ tree which is both sorted and balanced by the hash digest. The keys (digests) are
+CADB is a single file database for storing content addressed block data. You can think of it
+like a key/value store where the keys **MUST** be hash digests of a sufficient length and the
+value is arbitrary binary data.
+
+CADB is a special B+ tree which is both sorted and balanced using hash digests. The keys (digests) are
 sorted by binary comparison and the tree's structure is chunked using randomness derived from the tail
-of each hash. This produced a self-balancing and well sorted structure on-disc.
+of each hash. This produces a self-balancing and well sorted structure on-disc.
 
 The benefits of this approach are:
 
 * Predictable performance over time.
-  * As the entries in the store increase the tree depth logorithmically scales to the new size.
-  * The store never needs to be compacted in order to improve performance since the tree is
-    deterministically balanced. Compaction only serves to remove orphaned data, read/write performance
-    remains the same.
+  * As the entries in the store increase the tree depth it scales to the ideal new size.
+  * The database never needs to be compacted in order to improve performance since the tree is
+    iteratively balanced on mutation. Compaction only serves to remove orphaned data, read/write performance
+    remains the same no matter how large the database file gets.
   * The depth of the tree can be used to estimate the size of the branch data in the top of the tree.
-    This means branch reads can simply be stored in an LRU. This means there's no need to manually eject
+    This means branch reads can be stored in a simple LRU. This means there's no need to manually eject
     orphaned data or memmap the database file, the cache can predictably adjust to the needs of the tree.
 * Portability
   * The database file can be copied at any time, sent around, and a new store can use it immediately with
     zero load time.
-  * This combines a lot of the workflow we use CAR files for with our block storage needs into a tidy single
+  * This combines a lot of the workflows we use CAR files for with our block storage needs into a tidy single
     package.
-  * Since the tree is deterministally structured, a compacted CADB file can be consistently hashed.
+  * Since the tree is deterministally structured, a **compacted** CADB file can have guaranteed hash consistency.
   * Since the database is guaranteed to be a single map keyed by digest, the hash of a CADB file can be used in a CID
-    and we can walk the node structure in IPLD.
+    and potentially integrated into IPLD traversals.
     
 ## CADB Page File
 
@@ -174,3 +177,8 @@ Whenever you mutate a header you'll need:
 * Or, if the the last entry remains unchanged and the header is `CLOSED` any new child entries must be checked to see if they close the chunk and the header
   may need to be split.
   
+## Compaction
+
+One goal of compaction is that the resulting database file byte matches any other compacted store from any other implementation.
+
+TODO: ordering rules.
