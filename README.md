@@ -5,7 +5,7 @@ Experimental single file content addressed database.
 "Content address" means that data is keyed by a hash digest.
 
 CADB is a single file database for storing content addressed block data. You can think of it
-like a key/value store where the keys **MUST** be hash digests of a sufficient length and the
+like a key/value store where the keys **MUST** be hash digests, of a sufficient length and security, and the
 value is arbitrary binary data.
 
 CADB is a special B+ tree which is both sorted and balanced using hash digests. The keys (digests) are
