@@ -15,7 +15,7 @@ of each hash. This produces a self-balancing and well sorted structure on-disc.
 The benefits of this approach are:
 
 * Predictable performance over time.
-  * As the entries in the store increase the tree depth the tree shape scales to the ideal new size.
+  * As the entries in the store increase the depth of the tree, the tree's shape scales and balances to the ideal new size.
   * The database never needs to be compacted in order to improve performance since the tree is
     iteratively balanced on mutation. Compaction only serves to remove orphaned data, read/write performance
     remains the same no matter how large the database file gets.
