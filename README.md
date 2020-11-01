@@ -169,7 +169,7 @@ The tree manipulation is relatively straightforward if you're familiar with BTre
 Whenever you mutate a header you'll need:
 
 * `UNCLOSED` headers need to be re-chunked on any mutation.
-* Or, if the header is `CLOSED` and a new entry is appended to the end of the header, or if the last entry is every removed, the header entries must be concatenated with
+* Or, if the header is `CLOSED` and a new entry is appended to the end of the header or the last entry is removed, the header entries must be concatenated with
   the tree sibling to the right and re-chunked.
 * Or, if the the last entry remains unchanged and the header is `CLOSED` any new child entries must be checked to see if they close the chunk and the header
   may need to be split.
