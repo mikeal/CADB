@@ -56,7 +56,7 @@ Page File Format Example:
 A few terms:
 
 * `POS` is an 8 byte BigUint64. This is used for all file position references.
-* `LENGTH` is a single 4 byte Uint32 (? should this be a VARINT ?). This means CADB cannot store a single block larger than 4GB.
+* `LENGTH` is a single 4 byte Uint32. This means CADB cannot store a single block larger than 4GB.
 * `ADDR` is an 8 byte `POS` followed by a 4 byte Uint32 for the `LENGTH` of a read.
 * `Leaf` is a node containing the key/value pairs of the hash digest (key) and the `POS` of the block data (value)
 * `Branch` is a node containing child nodes (either more branches or leaves). It is a list of key/value pairs of the first hash digest
