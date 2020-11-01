@@ -75,10 +75,11 @@ entries followed by the current DBTAIL.
 ### TOKEN_TABLE
 
 * `Token` is a Uint8.
-* `Type` is a block type, either `LEAF` or `BRANCH`.
-* `Open/Closed` is only necessary in branch headers. It indicates whether or not the last child's has closed the
+* `Type` is the header type, either `LEAF` or `BRANCH`. (Note: parsing rules are identical between types but you must know the type in order
+  to interpret the `read(...ADDR)` of each entry.)
+* `Open/Closed` is only necessary in branch headers. It indicates whether or not the last child's entry has closed the
   node or not. This not needed in leaf nodes because the digest tail is used to determine when the node closes.
-* `Size` is the size of the `DIGEST` in bytes.
+* `SIZE` is the size of the `DIGEST` in bytes.
 
 ```
 +-----------------------------+
@@ -141,9 +142,9 @@ ENTRY
   * `COUNT` the number of entries in the digest. Given the `COUNT` you can parse `LENGTHS` since every length is a fixed size of 4 bytes.
   * `LENGTHS` is an ordered Uint32 list of `DIGEST` lengths. You can parse the entries by adding 12 bytes to every length (`ADDR` is 12 bytes).
 
-In a branch header, the `DIGEST` is the first digest in the child.
+In a branch header, the `DIGEST` is the first digest in the child. `read(...ADDR)` should be parsed as a `HEADER`.
 
-In a leaf header, the `DIGEST` is the hash digest key of the block data.
+In a leaf header, the `DIGEST` is the hash digest key of the block data. `read(...ADDR)` should be parsed as block value data.
 
 ### Chunking
 
