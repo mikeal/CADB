@@ -16,6 +16,21 @@ const file = () => {
 }
 
 const enc8 = i => new Uint8Array([255, 255, 255, 255, 255, 255, 255, i])
+const encRange = (num, size=8) => {
+  const template = [ ...Array(size).keys()].map(() => 255)
+  template[7] = 256
+  const buffers = []
+  while (num > 0) {
+    template[7] -= 1
+    buffers.push(new Uint8Array(template))
+    if (!template[7]) {
+      template[7] = 256
+      template[0] -= 1
+    }
+    num -= 1
+  }
+  return buffers
+}
 
 const cleanBytes = b => [ ...new Uint8Array(b.buffer, b.byteOffset, b.byteLength) ]
 const clean = obj => {
@@ -47,6 +62,8 @@ export default async test => {
       const n = node.entries[0]
     }
     same(clean(obj), clean(node))
+    same(obj.branch, obj.branch)
+    same(obj.leaf, obj.leaf)
   }
   test('entry roundtrip (64b length)', () => roundtrip(Entry, enc8(1), 0n, 8n))
   test('entry roundtrip (32b length)', () => roundtrip(Entry, enc8(1), 0n, 8))
@@ -60,6 +77,20 @@ export default async test => {
     const page = Page.create(batch)
     write(...page.vector)
     const root = await Node.load(read, getSize())
-    console.log(root)
+    const data = await root.get(enc8(1), read)
+    same([...data], [...enc8(2)])
+  })
+  test('page create w/ 300 entries ()', async test => {
+    const { write, read, bl, getSize } = file()
+    const digests = encRange(300)
+    const batch = digests.map(b => ({ put: { digest: b, data: b.slice(1) } }))
+    const page = Page.create(batch)
+    write(...page.vector)
+    const root = await Node.load(read, getSize())
+    console.log({ root: { leaf: root.leaf, branch: root.branch } })
+    for (const digest of digests) {
+      const data = await root.get(digest, read)
+      same([...data], [...digest.slice(1)])
+    }
   })
 }

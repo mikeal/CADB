@@ -15,11 +15,8 @@ const isFloat = n => Number(n) === n && n % 1 !== 0
 // when they are unaligned, which is slower, but still faster
 // than doing a memcopy
 
-const uint32 = b => Buffer.from(b, b.byteOffset, b.byteLength).readUint32LE()
-const uint64 = b => {
-  b = Buffer.from(b.buffer, b.byteOffset, b.byteLength)
-  return b.readBigUint64LE()
-}
+const uint32 = b => Buffer.from(b.buffer, b.byteOffset, b.byteLength).readUint32LE()
+const uint64 = b => Buffer.from(b.buffer, b.byteOffset, b.byteLength).readBigUint64LE()
 
 // TODO: cache small numbers to avoid unnecessary tiny allocations
 const enc32 = num => {
@@ -33,10 +30,7 @@ const enc64 = num => {
   return b
 }
 
-const to8 = typedArray => {
-  if (typedArray instanceof Uint8Array) return typedArray
-  return new Uint8Array(typedArray.buffer, typedArray.byteOffset, typedArray.byteLength)
-}
+const to8 = b => Buffer.from(b)
 
 const compare = (b1, b2) => {
   for (let i = 0; i < b1.byteLength; i++) {
@@ -174,6 +168,7 @@ const getSize = entries => {
   let i = 1
   while (i < entries.length) {
     if (size !== entries[i].digest.byteLength) throw new Error('Not implemented')
+    i += 1
   }
   return size
 }
@@ -182,7 +177,7 @@ class Leaf extends Node {
   get (digest, read) {
     for (const entry of this.entries) {
       if (compare(entry.digest, digest) === 0) {
-        return entry.readBytes(read)
+        return entry.read(read)
       }
     }
     throw new Error('Not found')
@@ -198,7 +193,6 @@ class Leaf extends Node {
   }
 
   static from (entries) {
-    const last = entries[entries.length - 1]
     const size = getSize(entries)
     const info = TOKENS.leaf[size]
     if (typeof info === 'undefined') throw new Error('Not implemented')
@@ -258,9 +252,13 @@ class Page {
     this.root = root
   }
 
+  tip (read) {
+    return parsedRead(read, ...this.root)
+  }
+
   static async transaction (batch, start, root, read) {
     const [pos, length] = root
-    const node = await parsedRead(read, pos, length)
+    const node = await this.tip()
     // TODO
   }
 
@@ -278,20 +276,54 @@ class Page {
       return addr
     }
     let entries = []
+    let nodes = []
     let root
+
+    const writeLeaf = () => {
+      const leaf = Leaf.from(entries)
+      root = write(...leaf.encode())
+      nodes.push([leaf, Entry.from(entries[0].digest, ...root)])
+      entries = []
+    }
     for (const { put, del } of batch) {
       if (del) continue // noop, del on empty database
       const { digest, data } = put
       const [pos, length] = write(data)
       entries.push(Entry.from(digest, pos, length))
       if (digest[digest.byteLength - 1] === 0) {
-        root = write(...Leaf.from(entries).encode())
-        entries = []
+        writeLeaf()
       }
     }
     if (entries.length) {
-      root = write(...Leaf.from(entries).encode())
+      writeLeaf()
     }
+
+    const writeBranch = (closed) => {
+      const branch = Branch.from(entries, closed)
+      root = write(...branch.encode())
+      console.log({root})
+      nodes.push([branch, Entry.from(entries[0].digest, ...root)])
+      entries = []
+    }
+
+    console.log('nodes', nodes.length)
+
+    while (nodes.length > 1) {
+      const branches = nodes
+      nodes = []
+      for (const [ node, entry ] of branches) {
+        entries.push(entry)
+        const hash = node.hash()
+        if (!hash[hash.byteLength - 1]) {
+          writeBranch(true)
+        }
+      }
+      if (entries.length) {
+        writeBranch(false)
+      }
+    }
+
+    console.log({final: root})
     const [pos, length] = root
     write(enc64(pos), enc32(Number(length)))
     return new Page({ vector, root, size })
