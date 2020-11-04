@@ -1,0 +1,31 @@
+{
+  "dependencies": {
+    "multiformats": "^4.3.1"
+  },
+  "devDependencies": {
+    "estest": "^10.3.6",
+    "standard": "^16.0.1"
+  },
+  "name": "CADB",
+  "description": "Experimental single file content addressed database.",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mikeal/CADB.git"
+  },
+  "keywords": [],
+  "author": "Mikeal Rogers <mikeal.rogers@gmail.com> (https://www.mikealrogers.com/)",
+  "license": "(Apache-2.0 AND MIT)",
+  "bugs": {
+    "url": "https://github.com/mikeal/CADB/issues"
+  },
+  "homepage": "https://github.com/mikeal/CADB#readme"
+}
