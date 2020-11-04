@@ -7,18 +7,36 @@ const hash = (...buffers) => {
   return hasher.digest()
 }
 
-const dataview = bytes => new DataView(bytes.buffer)
-const uint32 = bytes => dataview(bytes).getUint32(bytes.byteOffset)
-const uint64 = bytes => dataview(bytes).getBigUint64(bytes.byteOffset)
-const _enc = (num, View) => {
-  if (View !== BigUint64Array) num = Number(num)
-  const view = new View(1)
-  view[0] = num
-  return view
+const isFloat = n => Number(n) === n && n % 1 !== 0
+
+// It's always faster to read numbers from their TypedArray
+// but you can only read them out of properly aligned memory
+// which is unpredictable. You can read them with DataView
+// when they are unaligned, which is slower, but still faster
+// than doing a memcopy
+
+const uint32 = b => Buffer.from(b, b.byteOffset, b.byteLength).readUint32LE()
+const uint64 = b => {
+  b = Buffer.from(b.buffer, b.byteOffset, b.byteLength)
+  return b.readBigUint64LE()
 }
+
 // TODO: cache small numbers to avoid unnecessary tiny allocations
-const enc32 = num => _enc(num, Uint32Array)
-const enc64 = num => _enc(num, BigUint64Array)
+const enc32 = num => {
+  const b = Buffer.allocUnsafe(4)
+  b.writeUint32LE(num)
+  return b
+}
+const enc64 = num => {
+  const b = Buffer.allocUnsafe(8)
+  b.writeBigUint64LE(num)
+  return b
+}
+
+const to8 = typedArray => {
+  if (typedArray instanceof Uint8Array) return typedArray
+  return new Uint8Array(typedArray.buffer, typedArray.byteOffset, typedArray.byteLength)
+}
 
 const compare = (b1, b2) => {
   for (let i = 0; i < b1.byteLength; i++) {
@@ -55,13 +73,16 @@ class Entry {
   }
 
   static from (digest, pos, length) {
+    length = Number(length)
     const posBytes = enc64(pos)
     const lengthBytes = enc32(length)
     return new Entry({ digest, pos, length, posBytes, lengthBytes })
   }
 
-  static parse (size, bytes) {
+  static parse (bytes) {
+    bytes = to8(bytes)
     let cursor = 0
+    const size = bytes.byteLength - 12
     const digest = bytes.subarray(0, size)
     cursor += size
     const posBytes = bytes.subarray(cursor, cursor + 8)
@@ -74,6 +95,7 @@ class Entry {
 }
 
 const parser = bytes => {
+  bytes = to8(bytes)
   const [token] = bytes
   const info = TOKENS[token]
   const { size } = info
@@ -81,9 +103,9 @@ const parser = bytes => {
   let pos = 1
   const entries = []
   while (pos < bytes.byteLength) {
-    const chunk = bytes.subarray(pos, size + 12)
+    const chunk = bytes.subarray(pos, pos + size + 12)
     pos += (size + 12)
-    entries.push(Entry.parse(size, chunk))
+    entries.push(Entry.parse(chunk))
   }
   const parsed = { info, entries, bytes }
   if (info.leaf) {
@@ -131,7 +153,7 @@ class Node {
   }
 
   encode () {
-    if (this.bytes) return [this.bytes]
+    if (this.bytes) return [ this.bytes ]
     if (this.info.size === 'VAR') throw new Error('Not implemented')
     else {
       return [this.info.bytes, ...this.entries.map(entry => entry.encode()).flat()]
@@ -140,9 +162,9 @@ class Node {
 
   static async load (read, size) {
     size = BigInt(size)
-    const chunk = await read(size - 12n, size)
-    const sub = chunk.subarray(0, 8)
-    const [pos, length] = [uint64(chunk.subarray(0, 8)), uint32(chunk.subarray(9))]
+    const chunk = await read(size - 12n, 12)
+    const slice = (start, end) => chunk.subarray(start, end)
+    const [pos, length] = [uint64(slice(0, 8)), uint32(slice(8))]
     return parsedRead(read, pos, length)
   }
 }
@@ -271,9 +293,9 @@ class Page {
       root = write(...Leaf.from(entries).encode())
     }
     const [pos, length] = root
-    write(enc64(pos), enc32(length))
+    write(enc64(pos), enc32(Number(length)))
     return new Page({ vector, root, size })
   }
 }
 
-export { Page, compaction, Node }
+export { Page, Entry, Leaf, Branch, Node, compaction }
