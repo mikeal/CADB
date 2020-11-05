@@ -1,19 +1,6 @@
 import { Page, Node, Entry, Leaf, Branch, compaction } from '../src/types.js'
 import { deepStrictEqual as same } from 'assert'
-import bl from 'bl'
-
-const { BufferList } = bl
-
-const file = () => {
-  const bl = new BufferList()
-  const write = (...buffers) => buffers.forEach(buffer => bl.append(buffer))
-  const read = (pos, length) => {
-    const end = Number(pos + BigInt(length))
-    const chunk = bl.slice(Number(pos), end)
-    return chunk
-  }
-  return { write, read, bl, getSize: () => bl.length }
-}
+import { full as inmem } from '../src/cache.js'
 
 const enc8 = i => new Uint8Array([255, 255, 255, 255, 255, 255, 255, i])
 const encRange = (num, size=8) => {
@@ -54,9 +41,9 @@ export default async test => {
   // TODO: entry
   const roundtrip = (CLS, ...args) => {
     const obj = CLS.from(...args)
-    const bl = new BufferList(obj.encode())
-    const node = CLS.parse(bl.slice())
-    same(bl.slice(), (new BufferList(node.encode())).slice())
+    const b = Buffer.concat(obj.encode())
+    const node = CLS.parse(b)
+    same(b, Buffer.concat(node.encode()))
     if (obj.entries) {
       const o = obj.entries[0]
       const n = node.entries[0]
@@ -72,28 +59,28 @@ export default async test => {
   test('branch roundtrip (closed)', () => roundtrip(Branch, entries, true))
   test('branch roundtrip (open)', () => roundtrip(Branch, entries, false))
   test('page create w/ one entry (closed)', async test => {
-    const { write, read, bl, getSize } = file()
+    const { write, read, getSize, cache } = inmem()
     const batch = [{ put: { digest: enc8(1), data: enc8(2) } }]
     const page = Page.create(batch)
-    write(...page.vector)
-    const root = await Node.load(read, getSize())
-    const data = await root.get(enc8(1), read)
+    write(page.vector)
+    const root = await Node.load(read, getSize(), cache)
+    const data = await root.get(enc8(1), read, cache)
     same([...data], [...enc8(2)])
   })
   const bigpage = size => {
     test(`page create w/ ${size} entries ()`, async test => {
-      const { write, read, bl, getSize } = file()
+      const { write, read, getSize, cache } = inmem()
       const digests = encRange(size)
       const batch = digests.map(b => ({ put: { digest: b, data: b.slice(1) } }))
       const page = Page.create(batch)
-      write(...page.vector)
-      const root = await Node.load(read, getSize())
+      write(page.vector)
+      const root = await Node.load(read, getSize(), cache)
       for (const digest of digests) {
-        const data = await root.get(digest, read)
+        const data = await root.get(digest, read, cache)
         same([...data], [...digest.slice(1)])
       }
     })
   }
   bigpage(300)
-  bigpage(256 * 256)
+  bigpage(10 * 1000)
 }
