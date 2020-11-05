@@ -7,6 +7,14 @@ const hash = (...buffers) => {
   return hasher.digest()
 }
 
+const slicer = chunk => (start, end) => {
+  if (chunk.shallowSlice) {
+    return chunk.shallowSlice(start, end)
+  } else {
+    return chunk.subarray(start, end)
+  }
+}
+
 const isFloat = n => Number(n) === n && n % 1 !== 0
 
 // It's always faster to read numbers from their TypedArray
@@ -15,8 +23,14 @@ const isFloat = n => Number(n) === n && n % 1 !== 0
 // when they are unaligned, which is slower, but still faster
 // than doing a memcopy
 
-const uint32 = b => Buffer.from(b.buffer, b.byteOffset, b.byteLength).readUint32LE()
-const uint64 = b => Buffer.from(b.buffer, b.byteOffset, b.byteLength).readBigUint64LE()
+const uint32 = b => {
+  if (b.shallowSlice) b = b.slice()
+  return Buffer.from(b.buffer, b.byteOffset, b.byteLength).readUint32LE()
+}
+const uint64 = b => {
+  if (b.shallowSlice) b = b.slice()
+  return Buffer.from(b.buffer, b.byteOffset, b.byteLength).readBigUint64LE()
+}
 
 // TODO: cache small numbers to avoid unnecessary tiny allocations
 const enc32 = num => {
@@ -77,12 +91,13 @@ class Entry {
     bytes = to8(bytes)
     let cursor = 0
     const size = bytes.byteLength - 12
-    const digest = bytes.subarray(0, size)
+    const slice = slicer(bytes)
+    const digest = slice(0, size)
     cursor += size
-    const posBytes = bytes.subarray(cursor, cursor + 8)
+    const posBytes = slice(cursor, cursor + 8)
     const pos = uint64(posBytes)
     cursor += 8
-    const lengthBytes = bytes.subarray(cursor, cursor + 4)
+    const lengthBytes = slice(cursor, cursor + 4)
     const length = uint32(lengthBytes)
     return new Entry({ digest, pos, length, posBytes, lengthBytes })
   }
@@ -90,6 +105,7 @@ class Entry {
 
 const parser = bytes => {
   bytes = to8(bytes)
+  const slice = slicer(bytes)
   const [token] = bytes
   const info = TOKENS[token]
   const { size } = info
@@ -97,7 +113,7 @@ const parser = bytes => {
   let pos = 1
   const entries = []
   while (pos < bytes.byteLength) {
-    const chunk = bytes.subarray(pos, pos + size + 12)
+    const chunk = slice(pos, pos + size + 12)
     pos += (size + 12)
     entries.push(Entry.parse(chunk))
   }
@@ -109,10 +125,11 @@ const parser = bytes => {
   }
 }
 
-const parsedRead = async (read, pos, length) => {
-  const node = await read(pos, length)
+const parsedRead = async (read, pos, length, cache) => {
+  let node = await read(pos, length)
   if (node instanceof Uint8Array) {
-    return parser(node)
+    node = await parser(node)
+    cache(node, pos, length)
   }
   return node
 }
@@ -154,12 +171,12 @@ class Node {
     }
   }
 
-  static async load (read, size) {
+  static async load (read, size, cache) {
     size = BigInt(size)
     const chunk = await read(size - 12n, 12)
-    const slice = (start, end) => chunk.subarray(start, end)
+    const slice = slicer(chunk)
     const [pos, length] = [uint64(slice(0, 8)), uint32(slice(8))]
-    return parsedRead(read, pos, length)
+    return parsedRead(read, pos, length, cache)
   }
 }
 
@@ -200,8 +217,18 @@ class Leaf extends Node {
   }
 }
 class Branch extends Node {
-  get (digest, read) {
-    // TODO
+  async get (digest, read, cache) {
+    let last
+    for (const entry of this.entries) {
+      const comp = compare(digest, entry.digest)
+      if (comp > 0) {
+        break
+      }
+      last = entry
+    }
+    if (!last) throw new Error('Not found')
+    const node = await parsedRead(read, last.pos, last.length, cache)
+    return node.get(digest, read)
   }
 
   static from (entries, closed) {
@@ -211,12 +238,12 @@ class Branch extends Node {
   }
 }
 
-const compactNode = async function * (node, read) {
+const compactNode = async function * (node, read, cache) {
   for (const entry of node.entries) {
     if (node.leaf) {
       yield read(entry.pos, entry.length)
     } else {
-      yield * compactNode(await parsedRead(read, entry.pos, entry.length))
+      yield * compactNode(await parsedRead(read, entry.pos, entry.length, cache))
     }
   }
   yield node
@@ -225,7 +252,7 @@ const compactNode = async function * (node, read) {
 const sum = (x, y) => x + y
 
 const compaction = async function * (page, read) {
-  const root = await parsedRead(read, page.root.pos, page.root.length)
+  const root = await parsedRead(read, page.root.pos, page.root.length, cache)
   let i = 0
   let pos
   let length
@@ -252,8 +279,8 @@ class Page {
     this.root = root
   }
 
-  tip (read) {
-    return parsedRead(read, ...this.root)
+  tip (read, cache) {
+    return parsedRead(read, ...this.root, cache)
   }
 
   static async transaction (batch, start, root, read) {
@@ -268,7 +295,7 @@ class Page {
     let vector = []
     let size = 0n
     const write = (...buffers) => {
-      vector = vector.concat(buffers)
+      vector.push(buffers)
       const length = BigInt(buffers.map(b => b.byteLength).reduce(sum))
       const addr = [cursor, length]
       cursor += length
@@ -301,12 +328,9 @@ class Page {
     const writeBranch = (closed) => {
       const branch = Branch.from(entries, closed)
       root = write(...branch.encode())
-      console.log({root})
       nodes.push([branch, Entry.from(entries[0].digest, ...root)])
       entries = []
     }
-
-    console.log('nodes', nodes.length)
 
     while (nodes.length > 1) {
       const branches = nodes
@@ -323,10 +347,9 @@ class Page {
       }
     }
 
-    console.log({final: root})
     const [pos, length] = root
     write(enc64(pos), enc32(Number(length)))
-    return new Page({ vector, root, size })
+    return new Page({ vector: vector.flat(), root, size })
   }
 }
 

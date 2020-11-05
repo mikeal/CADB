@@ -80,17 +80,20 @@ export default async test => {
     const data = await root.get(enc8(1), read)
     same([...data], [...enc8(2)])
   })
-  test('page create w/ 300 entries ()', async test => {
-    const { write, read, bl, getSize } = file()
-    const digests = encRange(300)
-    const batch = digests.map(b => ({ put: { digest: b, data: b.slice(1) } }))
-    const page = Page.create(batch)
-    write(...page.vector)
-    const root = await Node.load(read, getSize())
-    console.log({ root: { leaf: root.leaf, branch: root.branch } })
-    for (const digest of digests) {
-      const data = await root.get(digest, read)
-      same([...data], [...digest.slice(1)])
-    }
-  })
+  const bigpage = size => {
+    test(`page create w/ ${size} entries ()`, async test => {
+      const { write, read, bl, getSize } = file()
+      const digests = encRange(size)
+      const batch = digests.map(b => ({ put: { digest: b, data: b.slice(1) } }))
+      const page = Page.create(batch)
+      write(...page.vector)
+      const root = await Node.load(read, getSize())
+      for (const digest of digests) {
+        const data = await root.get(digest, read)
+        same([...data], [...digest.slice(1)])
+      }
+    })
+  }
+  bigpage(300)
+  bigpage(256 * 256)
 }
