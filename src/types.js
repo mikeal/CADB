@@ -68,6 +68,10 @@ class Entry {
     this.lengthBytes = lengthBytes
   }
 
+  get byteLength () {
+    return this.digest.byteLength + 12
+  }
+
   get size () {
     return this.digest.size
   }
@@ -125,13 +129,18 @@ const parser = bytes => {
   }
 }
 
-const parsedRead = async (read, pos, length, cache) => {
-  let node = await read(pos, length)
+const _parsedRead = (node, pos, length, cache) => {
   if (node instanceof Uint8Array) {
-    node = await parser(node)
+    node = parser(node)
     cache(node, pos, length)
   }
   return node
+}
+
+const parsedRead = (read, pos, length, cache) => {
+  let node = read(pos, length)
+  if (node.then) return node.then(n => _parsedRead(node, pos, length, cache))
+  else return _parsedRead(node, pos, length, cache)
 }
 
 class Node {
@@ -139,6 +148,12 @@ class Node {
     this.info = info
     this.entries = entries
     this.bytes = bytes
+  }
+
+  get byteLength () {
+    if (this.bytes) return this.bytes.byteLength
+    if (this.info.size === 'VAR') throw new Error('Not implemented')
+    return 1 + this.entries.map(entry => entry.byteLength).reduce(sum)
   }
 
   get leaf () {
@@ -190,6 +205,36 @@ const getSize = entries => {
   return size
 }
 
+const leafRangeQuery = function * (entries, start, end, read) {
+  const reads = []
+  for (const entry of entries) {
+    const { digest } = entry
+    if (compare(digest, start) >= 0) {
+      if (compare(digest, end) >= 0) {
+        break
+      }
+      yield entry
+    }
+  }
+}
+
+const branchRangeQuery = async function * (entries, start, end, read, cache) {
+  const reads = []
+  for (const entry of entries) {
+    const { digest } = entry
+    if (compare(digest, start) >= 0) {
+      if (compare(digest, end) >= 0) {
+        break
+      }
+      reads.push(parsedRead(read, entry.pos, entry.length, cache))
+    }
+  }
+  for (let reader of reads) {
+    reader = await reader
+    yield * reader.range(start, end, read, cache)
+  }
+}
+
 class Leaf extends Node {
   get (digest, read) {
     for (const entry of this.entries) {
@@ -198,6 +243,10 @@ class Leaf extends Node {
       }
     }
     throw new Error('Not found')
+  }
+
+  range (start, end, read) {
+    return leafRangeQuery(this.entries, start, end, read)
   }
 
   has (digest) {
@@ -216,19 +265,26 @@ class Leaf extends Node {
     return new Leaf({ info, entries })
   }
 }
+
 class Branch extends Node {
   async get (digest, read, cache) {
     let last
+    let i = 0
     for (const entry of this.entries) {
       const comp = compare(digest, entry.digest)
       if (comp > 0) {
         break
       }
       last = entry
+      i++
     }
     if (!last) throw new Error('Not found')
     const node = await parsedRead(read, last.pos, last.length, cache)
     return node.get(digest, read)
+  }
+
+  range (start, end, read, cache) {
+    return branchRangeQuery(this.entries, start, end, read, cache)
   }
 
   static from (entries, closed) {
@@ -294,10 +350,11 @@ class Page {
     cursor = BigInt(cursor)
     let vector = []
     let size = 0n
-    const write = (...buffers) => {
-      vector.push(buffers)
-      const length = BigInt(buffers.map(b => b.byteLength).reduce(sum))
+    const write = (header) => {
+      vector.push(header)
+      let length = header.byteLength
       const addr = [cursor, length]
+      length = BigInt(length)
       cursor += length
       size += length
       return addr
@@ -308,7 +365,7 @@ class Page {
 
     const writeLeaf = () => {
       const leaf = Leaf.from(entries)
-      root = write(...leaf.encode())
+      root = write(leaf)
       nodes.push([leaf, Entry.from(entries[0].digest, ...root)])
       entries = []
     }
@@ -327,7 +384,7 @@ class Page {
 
     const writeBranch = (closed) => {
       const branch = Branch.from(entries, closed)
-      root = write(...branch.encode())
+      root = write(branch)
       nodes.push([branch, Entry.from(entries[0].digest, ...root)])
       entries = []
     }
@@ -348,7 +405,8 @@ class Page {
     }
 
     const [pos, length] = root
-    write(enc64(pos), enc32(Number(length)))
+    write(enc64(pos))
+    write(enc32(Number(length)))
     return new Page({ vector: vector.flat(), root, size })
   }
 }
