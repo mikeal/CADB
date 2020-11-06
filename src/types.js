@@ -15,8 +15,6 @@ const slicer = chunk => (start, end) => {
   }
 }
 
-const isFloat = n => Number(n) === n && n % 1 !== 0
-
 // It's always faster to read numbers from their TypedArray
 // but you can only read them out of properly aligned memory
 // which is unpredictable. You can read them with DataView
@@ -66,6 +64,10 @@ class Entry {
     this.length = length
     this.posBytes = posBytes
     this.lengthBytes = lengthBytes
+  }
+
+  get isEntry () {
+    return true
   }
 
   get byteLength () {
@@ -138,13 +140,13 @@ const _parsedRead = (node, pos, length, cache) => {
 }
 
 const parsedRead = (read, pos, length, cache) => {
-  let node = read(pos, length)
+  const node = read(pos, length)
   if (node.then) return node.then(n => _parsedRead(node, pos, length, cache))
   else return _parsedRead(node, pos, length, cache)
 }
 
 class Node {
-  constructor ({info, entries, bytes}) {
+  constructor ({ info, entries, bytes }) {
     this.info = info
     this.entries = entries
     this.bytes = bytes
@@ -179,7 +181,7 @@ class Node {
   }
 
   encode () {
-    if (this.bytes) return [ this.bytes ]
+    if (this.bytes) return [this.bytes]
     if (this.info.size === 'VAR') throw new Error('Not implemented')
     else {
       return [this.info.bytes, ...this.entries.map(entry => entry.encode()).flat()]
@@ -206,7 +208,6 @@ const getSize = entries => {
 }
 
 const leafRangeQuery = function * (entries, start, end, read) {
-  const reads = []
   for (const entry of entries) {
     const { digest } = entry
     if (compare(digest, start) >= 0) {
@@ -234,6 +235,9 @@ const branchRangeQuery = async function * (entries, start, end, read, cache) {
     yield * reader.range(start, end, read, cache)
   }
 }
+
+const _digest = x => x.put ? x.put.digest : x.del.digest
+const sortBatch = batch => batch.sort((x, y) => compare(_digest(x), _digest(y)))
 
 class Leaf extends Node {
   get (digest, read) {
@@ -266,17 +270,64 @@ class Leaf extends Node {
   }
 }
 
+const _mergeEntries = (entries, write, parentClosed) => {
+  // chunker
+  const branches = []
+  const handler = (chunk, closed) => {
+    chunk = chunk.map(entry => {
+      if (entry.isEntry) return entry
+      const addr = write(entry)
+      return Entry.from(entry.entries[0].digest, ...addr)
+    })
+    const branch = Branch.from(chunk, closed)
+    branches.push(branch)
+  }
+  let chunk = []
+  for (const entry of entries) {
+    if (!entry.isEntry) {
+      const hash = entry.hash()
+      if (hash[hash.length - 1] === 0) {
+        handler(chunk, true)
+        chunk = []
+      }
+    }
+    chunk.push(entry)
+  }
+  if (chunk.length) {
+    if (entries[entries - 1].isEntry) {
+      handler(chunk, parentClosed)
+    } else {
+      handler(chunk, false)
+    }
+  }
+  return branches
+}
+
+const mergeEntries = (entries, write, read, cache, parentClosed) => {
+  entries = entries.flat()
+
+  while (!entries[0].isEntry && entries[0].info.closed && entries.length > 1) {
+    const a = entries.shift()
+    const b = entries.shift()
+    if (b.isEntry) {
+      return parsedRead(read, b.pos, b.length, cache).then(b => {
+        return mergeEntries([b, ...entries], write, parentClosed)
+      })
+    }
+    entries.unshift(Branch.from(a.entries.concat(b.entries), b.info.closed))
+  }
+  _mergeEntries(entries, write, parentClosed)
+}
+
 class Branch extends Node {
   async get (digest, read, cache) {
     let last
-    let i = 0
     for (const entry of this.entries) {
       const comp = compare(digest, entry.digest)
-      if (comp > 0) {
+      if (comp < 0) {
         break
       }
       last = entry
-      i++
     }
     if (!last) throw new Error('Not found')
     const _node = parsedRead(read, last.pos, last.length, cache)
@@ -286,6 +337,44 @@ class Branch extends Node {
 
   range (start, end, read, cache) {
     return branchRangeQuery(this.entries, start, end, read, cache)
+  }
+
+  transaction (batch, read, cache, eject, write, sorted = false) {
+    if (!sorted) batch = sortBatch(batch)
+    else batch = [...batch]
+    const entries = []
+    const links = [...this.entries]
+    while (links.length) {
+      const entry = links.shift()
+      const ops = []
+      while (batch.length) {
+        const op = batch.shift()
+        const digest = _digest(op)
+        if (compare(digest, entry.digest) > 0) {
+          break
+        }
+        ops.push(op)
+      }
+      if (!links.length && batch.length) {
+        // feed remainging into the last node
+        batch.forEach(b => ops.push(b))
+      }
+      if (ops.length) {
+        const run = node => node.transaction(ops, read, cache, eject, true, write)
+        const _node = parsedRead(read, entry.pos, entry.length, cache)
+        if (_node.then) entries.push(_node.then(run))
+        else entries.push(run(_node))
+      } else {
+        entries.push(entry)
+      }
+    }
+
+    const args = [write, read, cache, this.info.closed]
+    if (entries.length) eject(this)
+    for (const header of entries) {
+      if (header.then) return Promise.all(entries).then(es => mergeEntries(es, ...args))
+    }
+    return mergeEntries(entries, ...args)
   }
 
   static from (entries, closed) {
@@ -308,7 +397,7 @@ const compactNode = async function * (node, read, cache) {
 
 const sum = (x, y) => x + y
 
-const compaction = async function * (page, read) {
+const compaction = async function * (page, read, cache) {
   const root = await parsedRead(read, page.root.pos, page.root.length, cache)
   let i = 0
   let pos
@@ -329,37 +418,51 @@ const compaction = async function * (page, read) {
   yield enc32(length)
 }
 
+const writer = (cursor) => {
+  cursor = BigInt(cursor)
+  const vector = []
+  let size = 0n
+  const write = (header) => {
+    vector.push(header)
+    let length = header.byteLength
+    const addr = [cursor, length]
+    length = BigInt(length)
+    cursor += length
+    size += length
+    return addr
+  }
+
+  return { write, vector, pos: cursor, getSize: () => size }
+}
+
 class Page {
-  constructor ({ vector, root, size }) {
+  constructor ({ vector, root, size, pos }) {
     this.vector = vector
     this.size = size
     this.root = root
+    this.pos = pos
   }
 
-  tip (read, cache) {
-    return parsedRead(read, ...this.root, cache)
-  }
-
-  static async transaction (batch, start, root, read) {
-    const [pos, length] = root
-    const node = await this.tip()
-    // TODO
-  }
-
-  static create (batch, cursor = 0n) {
-    // batch must already be sorted
-    cursor = BigInt(cursor)
-    let vector = []
-    let size = 0n
-    const write = (header) => {
-      vector.push(header)
-      let length = header.byteLength
-      const addr = [cursor, length]
-      length = BigInt(length)
-      cursor += length
-      size += length
-      return addr
+  static async transaction (batch, cursor, root, read, cache, sorted = false) {
+    const tip = await parsedRead(read, ...root, cache)
+    const ejected = []
+    const eject = node => ejected.push(node)
+    const { write, vector, getSize, cursor: pos } = writer(cursor)
+    let branches = await tip.transaction(batch, read, cache, eject, write, sorted)
+    while (branches.length > 1) {
+      branches = await mergeEntries(branches)
     }
+
+    root = write(branches[0])
+    write(enc64(root[0]))
+    write(enc32(Number(root[1])))
+    return new Page({ vector: vector.flat(), root, pos, size: getSize() })
+  }
+
+  static create (batch, cursor = 0n, sorted = false) {
+    if (!sorted) batch = sortBatch(batch)
+    const { write, vector, getSize } = writer(cursor)
+
     let entries = []
     let nodes = []
     let root
@@ -393,7 +496,7 @@ class Page {
     while (nodes.length > 1) {
       const branches = nodes
       nodes = []
-      for (const [ node, entry ] of branches) {
+      for (const [node, entry] of branches) {
         entries.push(entry)
         const hash = node.hash()
         if (!hash[hash.byteLength - 1]) {
@@ -408,8 +511,8 @@ class Page {
     const [pos, length] = root
     write(enc64(pos))
     write(enc32(Number(length)))
-    return new Page({ vector: vector.flat(), root, size })
+    return new Page({ vector: vector.flat(), root, pos: cursor, size: getSize() })
   }
 }
 
-export { Page, Entry, Leaf, Branch, Node, compaction }
+export { Page, Entry, Leaf, Branch, Node, compaction, sortBatch }
