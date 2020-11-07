@@ -246,8 +246,8 @@ console.log(compare(new Uint8Array([1]), new Uint8Array([0])))
 
 class Leaf extends Node {
   closed () {
-    const { digest } = this.entries[this.entries - 1]
-    return digest[digest - 1] === 0
+    const { digest } = this.entries[this.entries.length - 1]
+    return digest[digest.length - 1] === 0
   }
 
   get (digest, read) {
@@ -266,7 +266,33 @@ class Leaf extends Node {
   transaction (batch, read, cache, eject, write, sorted = false) {
     if (!sorted) batch = sortBatch(batch)
     else batch = [...batch]
-    const entries = [...this.entries]
+
+    let entries = [...this.entries]
+
+    for (const { put, del } of batch) {
+      if (del) {
+        const i = entries.findIndex(entry => compare(entry.digest, del.digest) === 0)
+        if (i !== -1) entries.splice(i, 1)
+      } else {
+        const entry = Entry.from(put.digest, ...write(put.data))
+        entries.push(entry)
+      }
+    }
+
+    entries = entries.sort(({ digest: a }, { digest: b }) => compare(a, b))
+    const chunks = []
+    let chunk = []
+    for (const entry of entries) {
+      chunk.push(entry)
+      if (entry.digest[entry.digest.length -1] === 0) {
+        chunks.push(chunk)
+        chunk = []
+      }
+    }
+    if (chunk.length) chunks.push(chunk)
+    return chunks.map(entries => Leaf.from(entries))
+
+    /*
     let i = 0
     while (batch.length) {
       const op = batch[0]
@@ -290,7 +316,7 @@ class Leaf extends Node {
         return Entry.from(digest, ...addr)
       }
 
-      if (comp > 0) {
+      if (comp < 0) {
         batch.shift()
         const entry = commit()
         if (entry) {
@@ -313,6 +339,7 @@ class Leaf extends Node {
     }
     if (chunk.length) chunks.push(chunk)
     return chunks.map(entries => Leaf.from(entries))
+    */
   }
 
   has (digest) {
@@ -356,7 +383,7 @@ const _mergeEntries = ({ entries, write, parentClosed }) => {
     chunk.push(entry)
   }
   if (chunk.length) {
-    if (entries[entries - 1].isEntry) {
+    if (entries[entries.length - 1].isEntry) {
       handler(chunk, parentClosed)
     } else {
       handler(chunk, false)
@@ -377,7 +404,7 @@ const mergeEntries = ({ entries, write, read, cache, eject, parentClosed }) => {
   while (i < entries.length) {
     // if there's a new branch that is not closed we need to merge it
     // with the chunk to the right.
-    if (entries[i].isNode && entries[i].closed() && entries.length > (i + 1)) {
+    if (entries[i].isNode && !entries[i].closed() && entries.length > (i + 1)) {
       const [a, b] = entries.splice(i, 2)
       if (b.isEntry) {
         pending.push(a)
@@ -394,8 +421,8 @@ const mergeEntries = ({ entries, write, read, cache, eject, parentClosed }) => {
         entries.splice(i, 0, Branch.from(all, b.closed()))
       }
     } else {
-      i++
       pending.push(entries[i])
+      i++
     }
   }
   const args = { write, read, cache, eject, parentClosed }
@@ -450,7 +477,7 @@ class Branch extends Node {
         batch.forEach(b => ops.push(b))
       }
       if (ops.length) {
-        const run = node => node.transaction(ops, read, cache, eject, true, write)
+        const run = node => node.transaction(ops, read, cache, eject, write, true)
         const _node = parsedRead(read, entry.pos, entry.length, cache)
         if (_node.then) entries.push(_node.then(run))
         else entries.push(run(_node))
@@ -543,8 +570,9 @@ class Page {
     const eject = node => ejected.push(node)
     const { write, vector, getSize } = writer(cursor)
     let branches = await tip.transaction(batch, read, cache, eject, write, sorted)
+    const args = { read, cache, eject, write, parentClosed: false }
     while (branches.length > 1) {
-      branches = await mergeEntries(branches)
+      branches = await mergeEntries({ entries: branches, ...args })
     }
 
     root = write(branches[0])

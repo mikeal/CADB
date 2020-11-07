@@ -107,10 +107,8 @@ export default async test => {
     const insert = async (...digests) => {
       inserts = inserts.concat(digests).sort(compare)
       batch = digests.map(digest => ({ put: { digest, data: enc8(2) } }))
-      console.log({before: getSize()})
       page = await Page.transaction({ batch, cursor: getSize(), root: page.root, read, cache })
       write(page.vector)
-      console.log({after: getSize()})
       root = await Node.load(read, getSize(), cache)
       const checks = [...inserts]
       for await (const entry of root.range(...query, read, cache)) {
@@ -124,9 +122,32 @@ export default async test => {
     }
 
     // insert one to the right
-    await insert(enc8(4))
+    await insert(enc8(5, 4))
 
     // insert one in-between
-    await insert(enc8(3))
+    await insert(enc8(5, 3))
+
+    // insert one to the left
+    await insert(enc8(3, 1))
+
+    // insert a split
+    let branch = await insert(enc8(4, 0))
+    same(branch.branch, true)
+    same(branch.entries.length, 2)
+
+    // insert on to the left of the left branch
+    branch = await insert(enc8(1, 5))
+    same(branch.branch, true)
+    same(branch.entries.length, 2)
+
+    // insert on to the middle of the left branch
+    branch = await insert(enc8(2, 5))
+    same(branch.branch, true)
+    same(branch.entries.length, 2)
+
+    // insert on to the right of the left branch
+    branch = await insert(enc8(3, 5))
+    same(branch.branch, true)
+    same(branch.entries.length, 2)
   })
 }
