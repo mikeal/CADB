@@ -1,8 +1,16 @@
-import { Page, Node, Entry, Leaf, Branch, compaction } from '../src/types.js'
+import { Page, Node, Entry, Leaf, Branch, compare, compaction } from '../src/types.js'
 import { deepStrictEqual as same } from 'assert'
 import { full as inmem } from '../src/cache.js'
 
-const enc8 = i => new Uint8Array([255, 255, 255, 255, 255, 255, 255, i])
+const enc8 = (...args) => {
+  const template = [ 255, 255, 255, 255, 255, 255, 255, 255 ]
+  let i = 8 - args.length
+  while (args.length) {
+    template[i] = args.shift()
+    i++
+  }
+  return new Uint8Array(template)
+}
 const encRange = (num, size=8) => {
   const template = [ ...Array(size).keys()].map(() => 255)
   template[7] = 256
@@ -83,4 +91,42 @@ export default async test => {
   }
   bigpage(300)
   bigpage(10 * 1000)
+
+  test('transaction(inserts): one entry at a time', async test => {
+    const { write, read, getSize, cache } = inmem()
+    let batch = [{ put: { digest: enc8(1), data: enc8(2) } }]
+    let page = Page.create(batch)
+    write(page.vector)
+    let root = await Node.load(read, getSize(), cache)
+    let data = await root.get(enc8(1), read, cache)
+    same([...data], [...enc8(2)])
+
+    const query = [ new Uint8Array([0]), new Uint8Array([...Array(33).keys()].map(() => 255)) ]
+
+    let inserts = [ enc8(1) ]
+    const insert = async (...digests) => {
+      inserts = inserts.concat(digests).sort(compare)
+      batch = digests.map(digest => ({ put: { digest, data: enc8(2) } }))
+      console.log({before: getSize()})
+      page = await Page.transaction({ batch, cursor: getSize(), root: page.root, read, cache })
+      write(page.vector)
+      console.log({after: getSize()})
+      root = await Node.load(read, getSize(), cache)
+      const checks = [...inserts]
+      for await (const entry of root.range(...query, read, cache)) {
+        const expected = checks.shift()
+        if (!expected) throw new Error('Too many results')
+        const data = await entry.read(read)
+        same([...data], [...enc8(2)])
+        same([...entry.digest], [...expected])
+      }
+      return root
+    }
+
+    // insert one to the right
+    await insert(enc8(4))
+
+    // insert one in-between
+    await insert(enc8(3))
+  })
 }

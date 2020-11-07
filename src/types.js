@@ -152,6 +152,10 @@ class Node {
     this.bytes = bytes
   }
 
+  get isNode () {
+    return true
+  }
+
   get byteLength () {
     if (this.bytes) return this.bytes.byteLength
     if (this.info.size === 'VAR') throw new Error('Not implemented')
@@ -164,10 +168,6 @@ class Node {
 
   get branch () {
     return !!this.info.branch
-  }
-
-  get closed () {
-    return !!this.info.closed
   }
 
   static parse (bytes) {
@@ -239,7 +239,17 @@ const branchRangeQuery = async function * (entries, start, end, read, cache) {
 const _digest = x => x.put ? x.put.digest : x.del.digest
 const sortBatch = batch => batch.sort((x, y) => compare(_digest(x), _digest(y)))
 
+/*
+console.log(compare(new Uint8Array([0]), new Uint8Array([1])))
+console.log(compare(new Uint8Array([1]), new Uint8Array([0])))
+*/
+
 class Leaf extends Node {
+  closed () {
+    const { digest } = this.entries[this.entries - 1]
+    return digest[digest - 1] === 0
+  }
+
   get (digest, read) {
     for (const entry of this.entries) {
       if (compare(entry.digest, digest) === 0) {
@@ -251,6 +261,58 @@ class Leaf extends Node {
 
   range (start, end, read) {
     return leafRangeQuery(this.entries, start, end, read)
+  }
+
+  transaction (batch, read, cache, eject, write, sorted = false) {
+    if (!sorted) batch = sortBatch(batch)
+    else batch = [...batch]
+    const entries = [...this.entries]
+    let i = 0
+    while (batch.length) {
+      const op = batch[0]
+      const { del, put } = op
+      const digest = _digest(op)
+      const comp = compare(digest, entries[i])
+      if (comp === 0) {
+        batch.shift()
+        if (del) {
+          entries.splice(i, 1)
+          i--
+        }
+      }
+
+      const commit = () => {
+        batch.shift()
+        // we can ignore deletes because they aren't actually
+        // in the database
+        if (del) return
+        const addr = write(put.data)
+        return Entry.from(digest, ...addr)
+      }
+
+      if (comp > 0) {
+        batch.shift()
+        const entry = commit()
+        if (entry) {
+          entries.splice(i, 0, entry)
+        }
+      }
+      i++
+      if (i === entries.length) {
+        while (batch.length) entries.push(commit())
+      }
+    }
+    const chunks = []
+    let chunk = []
+    for (const entry of entries) {
+      chunk.push(entry)
+      if (entry.closed) {
+        chunks.push(chunk)
+        chunk = []
+      }
+    }
+    if (chunk.length) chunks.push(chunk)
+    return chunks.map(entries => Leaf.from(entries))
   }
 
   has (digest) {
@@ -270,7 +332,7 @@ class Leaf extends Node {
   }
 }
 
-const _mergeEntries = (entries, write, parentClosed) => {
+const _mergeEntries = ({ entries, write, parentClosed }) => {
   // chunker
   const branches = []
   const handler = (chunk, closed) => {
@@ -303,23 +365,51 @@ const _mergeEntries = (entries, write, parentClosed) => {
   return branches
 }
 
-const mergeEntries = (entries, write, read, cache, parentClosed) => {
+const mergeEntries = ({ entries, write, read, cache, eject, parentClosed }) => {
   entries = entries.flat()
 
-  while (!entries[0].isEntry && entries[0].info.closed && entries.length > 1) {
-    const a = entries.shift()
-    const b = entries.shift()
-    if (b.isEntry) {
-      return parsedRead(read, b.pos, b.length, cache).then(b => {
-        return mergeEntries([b, ...entries], write, parentClosed)
-      })
+  let i = 0
+  // we need to collect merged branches as well as any new
+  // branch reads. they are collected into a linear array
+  // so that we can use full concurrency but remain synchronous
+  // when no async is needed (saves time spent in the event loop)
+  const pending = []
+  while (i < entries.length) {
+    // if there's a new branch that is not closed we need to merge it
+    // with the chunk to the right.
+    if (entries[i].isNode && entries[i].closed() && entries.length > (i + 1)) {
+      const [a, b] = entries.splice(i, 2)
+      if (b.isEntry) {
+        pending.push(a)
+        const p = parsedRead(read, b.pos, b.length, cache)
+        pending.push(p)
+        // the referenced node is going to be modified
+        // so this reference will be orphaned
+        eject(b)
+        i++
+      } else {
+        // stick the merged branch back into the array to be re-processed
+        // for another potential merge
+        const all = a.entries.concat(b.entries)
+        entries.splice(i, 0, Branch.from(all, b.closed()))
+      }
+    } else {
+      i++
+      pending.push(entries[i])
     }
-    entries.unshift(Branch.from(a.entries.concat(b.entries), b.info.closed))
   }
-  _mergeEntries(entries, write, parentClosed)
+  const args = { write, read, cache, eject, parentClosed }
+  for (const entry of pending) {
+    if (entry.then) return Promise.all(pending).then(entries => mergeEntries({ entries, ...args }))
+  }
+  return _mergeEntries({ entries, write, parentClosed })
 }
 
 class Branch extends Node {
+  closed () {
+    return this.info.closed
+  }
+
   async get (digest, read, cache) {
     let last
     for (const entry of this.entries) {
@@ -369,12 +459,16 @@ class Branch extends Node {
       }
     }
 
-    const args = [write, read, cache, this.info.closed]
+    const args = { write, read, cache, eject, parentClosed: this.info.closed }
     if (entries.length) eject(this)
     for (const header of entries) {
-      if (header.then) return Promise.all(entries).then(es => mergeEntries(es, ...args))
+      if (header.then) {
+        return Promise.all(entries).then(entries => {
+          return mergeEntries({ entries, ...args })
+        })
+      }
     }
-    return mergeEntries(entries, ...args)
+    return mergeEntries({ entries, ...args })
   }
 
   static from (entries, closed) {
@@ -443,11 +537,11 @@ class Page {
     this.pos = pos
   }
 
-  static async transaction (batch, cursor, root, read, cache, sorted = false) {
+  static async transaction ({ batch, cursor, root, read, cache, sorted }) {
     const tip = await parsedRead(read, ...root, cache)
     const ejected = []
     const eject = node => ejected.push(node)
-    const { write, vector, getSize, cursor: pos } = writer(cursor)
+    const { write, vector, getSize } = writer(cursor)
     let branches = await tip.transaction(batch, read, cache, eject, write, sorted)
     while (branches.length > 1) {
       branches = await mergeEntries(branches)
@@ -456,7 +550,7 @@ class Page {
     root = write(branches[0])
     write(enc64(root[0]))
     write(enc32(Number(root[1])))
-    return new Page({ vector: vector.flat(), root, pos, size: getSize() })
+    return new Page({ vector: vector.flat(), root, pos: cursor, size: getSize() })
   }
 
   static create (batch, cursor = 0n, sorted = false) {
@@ -515,4 +609,4 @@ class Page {
   }
 }
 
-export { Page, Entry, Leaf, Branch, Node, compaction, sortBatch }
+export { Page, Entry, Leaf, Branch, Node, compaction, compare, sortBatch }
