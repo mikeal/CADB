@@ -269,6 +269,7 @@ class Leaf extends Node {
 
     let entries = [...this.entries]
 
+    // console.log('put', [...batch[0].put.digest])
     for (const { put, del } of batch) {
       if (del) {
         const i = entries.findIndex(entry => compare(entry.digest, del.digest) === 0)
@@ -284,62 +285,13 @@ class Leaf extends Node {
     let chunk = []
     for (const entry of entries) {
       chunk.push(entry)
-      if (entry.digest[entry.digest.length -1] === 0) {
+      if (entry.digest[entry.digest.length - 1] === 0) {
         chunks.push(chunk)
         chunk = []
       }
     }
     if (chunk.length) chunks.push(chunk)
     return chunks.map(entries => Leaf.from(entries))
-
-    /*
-    let i = 0
-    while (batch.length) {
-      const op = batch[0]
-      const { del, put } = op
-      const digest = _digest(op)
-      const comp = compare(digest, entries[i])
-      if (comp === 0) {
-        batch.shift()
-        if (del) {
-          entries.splice(i, 1)
-          i--
-        }
-      }
-
-      const commit = () => {
-        batch.shift()
-        // we can ignore deletes because they aren't actually
-        // in the database
-        if (del) return
-        const addr = write(put.data)
-        return Entry.from(digest, ...addr)
-      }
-
-      if (comp < 0) {
-        batch.shift()
-        const entry = commit()
-        if (entry) {
-          entries.splice(i, 0, entry)
-        }
-      }
-      i++
-      if (i === entries.length) {
-        while (batch.length) entries.push(commit())
-      }
-    }
-    const chunks = []
-    let chunk = []
-    for (const entry of entries) {
-      chunk.push(entry)
-      if (entry.closed) {
-        chunks.push(chunk)
-        chunk = []
-      }
-    }
-    if (chunk.length) chunks.push(chunk)
-    return chunks.map(entries => Leaf.from(entries))
-    */
   }
 
   has (digest) {
@@ -459,32 +411,33 @@ class Branch extends Node {
   transaction (batch, read, cache, eject, write, sorted = false) {
     if (!sorted) batch = sortBatch(batch)
     else batch = [...batch]
-    const entries = []
-    const links = [...this.entries]
-    while (links.length) {
-      const entry = links.shift()
+    const results = []
+
+    for (let i = 0; i < this.entries.length; i++) {
+      // work backwards over the entries
+      const entry = this.entries[this.entries.length - (i + 1)]
       const ops = []
       while (batch.length) {
-        const op = batch.shift()
-        const digest = _digest(op)
-        if (compare(digest, entry.digest) > 0) {
+        const digest = _digest(batch[batch.length - 1])
+        if (compare(digest, entry.digest) > -1) {
+          ops.push(batch.pop())
+        } else {
           break
         }
-        ops.push(op)
       }
-      if (!links.length && batch.length) {
-        // feed remainging into the last node
-        batch.forEach(b => ops.push(b))
+      if (i === (this.entries.length - 1) && batch.length) {
+        batch.forEach(op => ops.push(op))
       }
       if (ops.length) {
         const run = node => node.transaction(ops, read, cache, eject, write, true)
-        const _node = parsedRead(read, entry.pos, entry.length, cache)
-        if (_node.then) entries.push(_node.then(run))
-        else entries.push(run(_node))
+        const node = parsedRead(read, entry.pos, entry.length, cache)
+        if (node.then) results.push(node.then(node => run(node)))
+        else results.push(run(node))
       } else {
-        entries.push(entry)
+        results.push(entry)
       }
     }
+    const entries = results.reverse()
 
     const args = { write, read, cache, eject, parentClosed: this.info.closed }
     if (entries.length) eject(this)

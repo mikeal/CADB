@@ -118,6 +118,7 @@ export default async test => {
         same([...data], [...enc8(2)])
         same([...entry.digest], [...expected])
       }
+      same(checks.length, 0)
       return root
     }
 
