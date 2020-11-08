@@ -1,7 +1,4 @@
-const full = () => {
-  const buffers = {}
-  const nodes = {}
-  let cursor = 0n
+const full = (buffers={}, nodes={}, cursor=0n) => {
   const read = (pos, length) => {
     if (nodes[pos]) {
       return nodes[pos]
@@ -32,7 +29,8 @@ const full = () => {
       }
     }
   }
-  return { write, read, cache, getSize: () => cursor }
+  const copy = async () => full({...buffers}, {...nodes}, cursor)
+  return { write, read, cache, copy, getSize: () => cursor }
 }
 
 export { full }

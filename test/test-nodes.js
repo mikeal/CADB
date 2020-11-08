@@ -93,7 +93,7 @@ export default async test => {
   bigpage(10 * 1000)
 
   test('transaction(inserts): one entry at a time', async test => {
-    const { write, read, getSize, cache } = inmem()
+    const { write, read, getSize, cache, copy } = inmem()
     let batch = [{ put: { digest: enc8(1), data: enc8(2) } }]
     let page = Page.create(batch)
     write(page.vector)
@@ -150,5 +150,40 @@ export default async test => {
     branch = await insert(enc8(3, 5))
     same(branch.branch, true)
     same(branch.entries.length, 2)
+
+    // insert to the right of the right branch
+    branch = await insert(enc8(255, 255))
+    same(branch.branch, true)
+    same(branch.entries.length, 2)
+
+    // insert in the middle of the right branch
+    branch = await insert(enc8(255, 250))
+    same(branch.branch, true)
+    same(branch.entries.length, 2)
+
+    const rm = async (root, digest) => {
+      const batch = [ { del: { digest } } ]
+      const { write, read, getSize, cache } = await copy()
+      const page = await Page.transaction({ batch, cursor: getSize(), root, read, cache })
+      write(page.vector)
+      root = await Node.load(read, page.pos + page.size, cache)
+      const checks = inserts.filter(d => compare(d, digest) !== 0)
+      for await (const entry of root.range(...query, read, cache)) {
+        const expected = checks.shift()
+        if (!expected) throw new Error('Too many results')
+        const data = await entry.read(read)
+        same([...data], [...enc8(2)])
+        same([...entry.digest], [...expected])
+      }
+      same(checks.length, 0)
+      return page.root
+    }
+
+    const full = [ page.root, getSize() ]
+
+    // rm every individual digest
+    for (const digest of inserts) {
+      await rm(...full, digest)
+    }
   })
 }

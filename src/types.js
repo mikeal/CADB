@@ -269,7 +269,6 @@ class Leaf extends Node {
 
     let entries = [...this.entries]
 
-    // console.log('put', [...batch[0].put.digest])
     for (const { put, del } of batch) {
       if (del) {
         const i = entries.findIndex(entry => compare(entry.digest, del.digest) === 0)
