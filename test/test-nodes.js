@@ -1,6 +1,7 @@
 import { Page, Node, Entry, Leaf, Branch, compare, compaction } from '../src/types.js'
 import { deepStrictEqual as same } from 'assert'
 import { full as inmem } from '../src/cache.js'
+import crypto from 'crypto'
 
 const enc8 = (...args) => {
   const template = [ 255, 255, 255, 255, 255, 255, 255, 255 ]
@@ -94,19 +95,19 @@ export default async test => {
 
   test('transaction(inserts): one entry at a time', async test => {
     const { write, read, getSize, cache, copy } = inmem()
-    let batch = [{ put: { digest: enc8(1), data: enc8(2) } }]
+    let batch = [{ put: { digest: enc8(1), data: Buffer.from([1, 1]) } }]
     let page = Page.create(batch)
     write(page.vector)
     let root = await Node.load(read, getSize(), cache)
     let data = await root.get(enc8(1), read, cache)
-    same([...data], [...enc8(2)])
+    same([...data], [...Buffer.from([1, 1])])
 
     const query = [ new Uint8Array([0]), new Uint8Array([...Array(33).keys()].map(() => 255)) ]
 
     let inserts = [ enc8(1) ]
     const insert = async (...digests) => {
       inserts = inserts.concat(digests).sort(compare)
-      batch = digests.map(digest => ({ put: { digest, data: enc8(2) } }))
+      batch = digests.map(digest => ({ put: { digest, data: Buffer.from([1, 1]) } }))
       page = await Page.transaction({ batch, cursor: getSize(), root: page.root, read, cache })
       write(page.vector)
       root = await Node.load(read, getSize(), cache)
@@ -115,7 +116,7 @@ export default async test => {
         const expected = checks.shift()
         if (!expected) throw new Error('Too many results')
         const data = await entry.read(read)
-        same([...data], [...enc8(2)])
+        same([...data], [1, 1])
         same([...entry.digest], [...expected])
       }
       same(checks.length, 0)
@@ -161,29 +162,29 @@ export default async test => {
     same(branch.branch, true)
     same(branch.entries.length, 2)
 
-    const tmprm = async (root, digest) => {
+    const _root = page.root
+
+    const tmprm = async (digest) => {
       const batch = [ { del: { digest } } ]
       const { write, read, getSize, cache } = await copy()
-      const page = await Page.transaction({ batch, cursor: getSize(), root, read, cache })
+      const page = await Page.transaction({ batch, cursor: getSize(), root: _root, read, cache })
       write(page.vector)
-      root = await Node.load(read, page.pos + page.size, cache)
+      const node = await Node.load(read, page.pos + page.size, cache)
       const checks = inserts.filter(d => compare(d, digest) !== 0)
-      for await (const entry of root.range(...query, read, cache)) {
+      for await (const entry of node.range(...query, read, cache)) {
         const expected = checks.shift()
         if (!expected) throw new Error('Too many results')
         const data = await entry.read(read)
-        same([...data], [...enc8(2)])
+        same([...data], [1, 1])
         same([...entry.digest], [...expected])
       }
       same(checks.length, 0)
       return page.root
     }
 
-    const full = [ page.root, getSize() ]
-
     // rm every individual digest
     for (const digest of inserts) {
-      await tmprm(...full, digest)
+      await tmprm(digest)
     }
 
     const rm = async digest => {
@@ -196,8 +197,11 @@ export default async test => {
         const expected = checks.shift()
         if (!expected) throw new Error('Too many results')
         const data = await entry.read(read)
-        same([...data], [...enc8(2)])
+        same([...data], [1, 1])
         same([...entry.digest], [...expected])
+      }
+      if (checks.length !== 0) {
+        console.log(checks.map(digest => [...digest]))
       }
       same(checks.length, 0)
       return page.root
@@ -206,6 +210,57 @@ export default async test => {
     // rm every individual digest
     while (inserts.length) {
       await rm(inserts.pop())
+    }
+  })
+
+  test('transaction: stress test', async test => {
+    const { write, read, getSize, cache, copy } = inmem()
+    let batch = [{ put: { digest: enc8(1), data: Buffer.from([ 1 ]) } }]
+    let page = Page.create(batch)
+    write(page.vector)
+    let root = await Node.load(read, getSize(), cache)
+    let data = await root.get(enc8(1), read, cache)
+    same([...data], [ 1 ])
+
+    const query = [ new Uint8Array([0]), new Uint8Array([...Array(33).keys()].map(() => 255)) ]
+
+    const encRange = (num, size=8) => [...Array(num).keys()].map(() => crypto.randomBytes(size))
+
+    let inserts = [ enc8(1) ]
+    const insert = async (puts, dels) => {
+      inserts = inserts.concat(puts).sort(compare)
+      inserts = inserts.filter(digest => {
+        for (const del of dels) {
+          if (compare(del, digest) === 0) return false
+        }
+        return true
+      })
+      const put = puts.map(digest => ({ put: { digest, data: Buffer.from([1]) } }))
+      const del = dels.map(digest => ({ del: { digest } }))
+      batch = [ ...put, ...del ]
+      page = await Page.transaction({ batch, cursor: getSize(), root: page.root, read, cache })
+      write(page.vector)
+      root = await Node.load(read, getSize(), cache)
+      const checks = [...inserts]
+      for await (const entry of root.range(...query, read, cache)) {
+        const expected = checks.shift()
+        if (!expected) throw new Error('Too many results')
+        const data = await entry.read(read)
+        same([...data], [1])
+        // same([...entry.digest], [...expected])
+      }
+      same(checks.length, 0)
+      return root
+    }
+
+    // initial insert
+    await insert(encRange(1000), [])
+
+    let i = 0
+    while (i < 100) {
+      i++
+      console.log({i})
+      await insert(encRange(1000), [], inserts.slice(0, 500))
     }
   })
 }

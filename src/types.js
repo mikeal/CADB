@@ -271,10 +271,20 @@ class Leaf extends Node {
 
     let entries = [...this.entries]
 
+    const expected = {
+      puts: batch.filter(op => op.put).length,
+      dels: batch.filter(op => op.del).length
+    }
+
     for (const { put, del } of batch) {
       if (del) {
-        const i = entries.findIndex(entry => compare(entry.digest, del.digest) === 0)
-        if (i !== -1) entries.splice(i, 1)
+        const findIndex = () => entries.findIndex(entry => compare(entry.digest, del.digest) === 0)
+        let i = findIndex()
+        // safety: this won't have to be a while loop once we can trust the writer a little more
+        while (i !== -1) {
+          entries.splice(i, 1)
+          i = findIndex()
+        }
       } else {
         const entry = Entry.from(put.digest, ...write(put.data))
         entries.push(entry)
@@ -282,6 +292,7 @@ class Leaf extends Node {
     }
 
     entries = entries.sort(({ digest: a }, { digest: b }) => compare(a, b))
+
     const chunks = []
     let chunk = []
     for (const entry of entries) {
@@ -320,8 +331,10 @@ const _mergeEntries = ({ entries, write, parentClosed }) => {
     chunk = chunk.map(entry => {
       if (entry.isEntry) return entry
       const addr = write(entry)
+      if (!entry.entries[0]) console.log({emptyBug: [], chunk, entry})
       return Entry.from(entry.entries[0].digest, ...addr)
     })
+    if (!chunk.length) throw new Error('empty bug')
     const branch = Branch.from(chunk, closed)
     branches.push(branch)
   }
@@ -372,7 +385,12 @@ const mergeEntries = ({ entries, write, read, cache, eject, parentClosed }) => {
         // stick the merged branch back into the array to be re-processed
         // for another potential merge
         const all = a.entries.concat(b.entries)
-        entries.splice(i, 0, Branch.from(all, b.closed()))
+        if (a.leaf || b.leaf) {
+          if (a.leaf !== b.leaf) throw new Error('Not implemented')
+          entries.splice(i, 0, Leaf.from(all))
+        } else {
+          entries.splice(i, 0, Branch.from(all, b.closed()))
+        }
       }
     } else {
       pending.push(entries[i])
@@ -569,6 +587,7 @@ class Page {
     }
 
     const writeBranch = (closed) => {
+      if (!entries.length) throw new Error('empty bug')
       const branch = Branch.from(entries, closed)
       root = write(branch)
       nodes.push([branch, Entry.from(entries[0].digest, ...root)])

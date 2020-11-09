@@ -1,18 +1,18 @@
-const full = (buffers={}, nodes={}, cursor=0n) => {
+const full = (buffers=new Map(), nodes=new Map(), cursor=0n) => {
   const read = (pos, length) => {
-    if (nodes[pos]) {
-      return nodes[pos]
+    if (nodes.has(pos)) {
+      return nodes.get(pos)
     }
-    let b = buffers[pos]
+    let b = buffers.get(pos)
     if (!b) throw new Error(`Cache Error read(${pos})`)
     while (b.byteLength !== length) {
-      b = Buffer.concat([b, buffers[pos + BigInt(b.byteLength)]])
+      b = Buffer.concat([b, buffers.get(pos + BigInt(b.byteLength))])
       if (!b) throw new Error(`Cache Error read(${pos})`)
     }
     return b
   }
   const cache = (node, pos, length) => {
-    nodes[pos] = node
+    nodes.set(pos, node)
   }
 
   const write = vector => {
@@ -23,13 +23,13 @@ const full = (buffers={}, nodes={}, cursor=0n) => {
         if (header.encode) {
           cache(header, cursor)
         } else {
-          buffers[cursor] = header
+          buffers.set(cursor, header)
         }
         cursor += BigInt(header.byteLength)
       }
     }
   }
-  const copy = async () => full({...buffers}, {...nodes}, cursor)
+  const copy = async () => full(new Map(buffers), new Map(nodes), cursor)
   return { write, read, cache, copy, getSize: () => cursor }
 }
 
