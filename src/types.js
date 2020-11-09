@@ -159,7 +159,7 @@ class Node {
   get byteLength () {
     if (this.bytes) return this.bytes.byteLength
     if (this.info.size === 'VAR') throw new Error('Not implemented')
-    return 1 + this.entries.map(entry => entry.byteLength).reduce(sum)
+    return 1 + this.entries.map(entry => entry.byteLength).reduce(sum, 0)
   }
 
   get leaf () {
@@ -198,6 +198,8 @@ class Node {
 }
 
 const getSize = entries => {
+  // empty leaf is 8 bytes long
+  if (!entries[0]) return 8
   const size = entries[0].digest.byteLength
   let i = 1
   while (i < entries.length) {
@@ -311,6 +313,7 @@ class Leaf extends Node {
 }
 
 const _mergeEntries = ({ entries, write, parentClosed }) => {
+  if (!entries.length) return []
   // chunker
   const branches = []
   const handler = (chunk, closed) => {
@@ -527,7 +530,12 @@ class Page {
       branches = await mergeEntries({ entries: branches, ...args })
     }
 
-    root = write(branches[0])
+    if (!branches.length) {
+      root = write(Leaf.from([]))
+    } else {
+      root = write(branches[0])
+    }
+
     write(enc64(root[0]))
     write(enc32(Number(root[1])))
     return new Page({ vector: vector.flat(), root, pos: cursor, size: getSize() })

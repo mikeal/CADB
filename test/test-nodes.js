@@ -161,7 +161,7 @@ export default async test => {
     same(branch.branch, true)
     same(branch.entries.length, 2)
 
-    const rm = async (root, digest) => {
+    const tmprm = async (root, digest) => {
       const batch = [ { del: { digest } } ]
       const { write, read, getSize, cache } = await copy()
       const page = await Page.transaction({ batch, cursor: getSize(), root, read, cache })
@@ -183,7 +183,29 @@ export default async test => {
 
     // rm every individual digest
     for (const digest of inserts) {
-      await rm(...full, digest)
+      await tmprm(...full, digest)
+    }
+
+    const rm = async digest => {
+      const batch = [ { del: { digest } } ]
+      page = await Page.transaction({ batch, cursor: getSize(), root: page.root, read, cache })
+      write(page.vector)
+      root = await Node.load(read, page.pos + page.size, cache)
+      const checks = [...inserts]
+      for await (const entry of root.range(...query, read, cache)) {
+        const expected = checks.shift()
+        if (!expected) throw new Error('Too many results')
+        const data = await entry.read(read)
+        same([...data], [...enc8(2)])
+        same([...entry.digest], [...expected])
+      }
+      same(checks.length, 0)
+      return page.root
+    }
+
+    // rm every individual digest
+    while (inserts.length) {
+      await rm(inserts.pop())
     }
   })
 }
