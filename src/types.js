@@ -372,25 +372,29 @@ const mergeEntries = ({ entries, write, read, cache, eject, parentClosed }) => {
     // if there's a new branch that is not closed we need to merge it
     // with the chunk to the right.
     if (entries[i].isNode && !entries[i].closed() && entries.length > (i + 1)) {
-      const [a, b] = entries.splice(i, 2)
+      let [a, b] = entries.splice(i, 2)
       if (b.isEntry) {
         pending.push(a)
         const p = parsedRead(read, b.pos, b.length, cache)
-        pending.push(p)
+        if (p.then) {
+          pending.push(p)
+          eject(b)
+          i++
+          break
+        } else {
+          b = p
+        }
         // the referenced node is going to be modified
         // so this reference will be orphaned
-        eject(b)
-        i++
+      }
+      // stick the merged branch back into the array to be re-processed
+      // for another potential merge
+      const all = a.entries.concat(b.entries)
+      if (a.leaf || b.leaf) {
+        if (a.leaf !== b.leaf) throw new Error('Not implemented')
+        entries.splice(i, 0, Leaf.from(all))
       } else {
-        // stick the merged branch back into the array to be re-processed
-        // for another potential merge
-        const all = a.entries.concat(b.entries)
-        if (a.leaf || b.leaf) {
-          if (a.leaf !== b.leaf) throw new Error('Not implemented')
-          entries.splice(i, 0, Leaf.from(all))
-        } else {
-          entries.splice(i, 0, Branch.from(all, b.closed()))
-        }
+        entries.splice(i, 0, Branch.from(all, b.closed()))
       }
     } else {
       pending.push(entries[i])

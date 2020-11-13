@@ -200,9 +200,6 @@ export default async test => {
         same([...data], [1, 1])
         same([...entry.digest], [...expected])
       }
-      if (checks.length !== 0) {
-        console.log(checks.map(digest => [...digest]))
-      }
       same(checks.length, 0)
       return page.root
     }
@@ -260,7 +257,7 @@ export default async test => {
     while (i < 100) {
       i++
       console.log({i})
-      await insert(encRange(1000), [], inserts.slice(0, 500))
+      await insert(encRange(1000), []) //, inserts.slice(0, 500))
     }
   })
 }
