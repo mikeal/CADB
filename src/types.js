@@ -334,7 +334,7 @@ const _mergeEntries = ({ entries, write, parentClosed }) => {
       if (!entry.entries[0]) console.log({emptyBug: [], chunk, entry})
       return Entry.from(entry.entries[0].digest, ...addr)
     })
-    if (!chunk.length) throw new Error('empty bug')
+    if (!chunk.length) return
     const branch = Branch.from(chunk, closed)
     branches.push(branch)
   }
