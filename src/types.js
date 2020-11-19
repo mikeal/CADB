@@ -45,6 +45,9 @@ const enc64 = num => {
 const to8 = b => Buffer.from(b)
 
 const compare = (b1, b2) => {
+  // Note: last perf profile of mutations showed that this function
+  // is LazyCompile and using up a lot of the time. with some tweaking
+  // this can probably get inlined
   for (let i = 0; i < b1.byteLength; i++) {
     if (b2.byteLength === i) return 1
     const c1 = b1[i]

@@ -42,7 +42,7 @@ const create = async (size, digestLength=8, valueLength) => {
   console.log(`${ Math.floor(i / time) } reads per second in range query`)
 }
 
-const mutations = async () => {
+const mutations = async (range, iterations) => {
   const { write, read, getSize, cache, copy } = inmem()
   const digest = encRange(1)[0]
   let batch = [{ put: { digest, data: Buffer.from([ 1 ]) } }]
@@ -68,27 +68,16 @@ const mutations = async () => {
     batch = [ ...put, ...del ]
     page = await Page.transaction({ batch, cursor: getSize(), root: page.root, read, cache })
     write(page.vector)
-    root = await Node.load(read, getSize(), cache)
-    const checks = [...inserts]
-    for await (const entry of root.range(...query, read, cache)) {
-      const expected = checks.shift()
-      if (!expected) throw new Error('Too many results')
-      const data = await entry.read(read)
-      same([...data], [1])
-      // same([...entry.digest], [...expected])
-    }
-    same(checks.length, 0)
-    return root
-  }
-
-  // initial insert
-  await insert(encRange(1000), [])
+ }
 
   let i = 0
-  while (i < 100) {
+  console.log({range, iterations})
+  while (i < iterations) {
     i++
-    console.log({i})
-    await insert(encRange(1000), []) //, inserts.slice(0, 500))
+    const start = Date.now()
+    await insert(encRange(range), [])
+    const end = Date.now()
+    console.log(`range(${ range }) insert at ${ Math.floor(range / ( end - start ) * 1000) }p/s`)
   }
 }
 
@@ -99,6 +88,6 @@ const run = async () => {
   await create(1000 * 100, 32)
   await create(1000 * 1000, 32)
   */
-  await mutations()
+  await mutations(100000, 40)
 }
 run()
