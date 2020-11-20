@@ -47,7 +47,9 @@ const mutex = filename => {
     return data
   }
 
-  const put = async (digest, data) => {
+  let lock
+
+  const _put = async (digest, data) => {
     const batch = [ { put: { digest, data } } ]
     let page
     if (!root) {
@@ -61,19 +63,34 @@ const mutex = filename => {
     size = page.pos + page.size
     root = page.root
   }
+  const put = async (digest, data) => {
+    while (lock) await lock
+    lock = _put(digest, data)
+    const ret = await lock
+    lock = null
+    return ret
+  }
 
-  const batch = async (batch) => {
+  const _batch = async (batch, sorted) => {
     let page
     if (!root) {
       page = await Page.create(batch)
     } else {
-      const opts = { batch, cursor: size, root, read: _read, cache: cache.cache }
+      const opts = { batch, cursor: size, root, read: _read, cache: cache.cache, sorted }
       page = await Page.transaction(opts)
     }
     const vector = page.encode()
     await writev(writer, vector, size)
     size = page.pos + page.size
     root = page.root
+  }
+
+  const batch = async (batch, sorted=false) => {
+    while (lock) await lock
+    lock = _batch(batch, sorted)
+    const ret = await lock
+    lock = null
+    return ret
   }
 
   return { getSize: () => size, put, get, batch }
