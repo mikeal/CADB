@@ -66,17 +66,19 @@ const mutations = async (range, iterations) => {
     const put = puts.map(digest => ({ put: { digest, data: Buffer.from([1]) } }))
     const del = dels.map(digest => ({ del: { digest } }))
     batch = [ ...put, ...del ]
-    page = await Page.transaction({ batch, cursor: getSize(), root: page.root, read, cache })
+    batch = batch.sort(({ put: { digest: a }}, { put: { digest: b }}) => compare(a, b))
+    const start = Date.now()
+    page = await Page.transaction({ batch, cursor: getSize(), root: page.root, read, cache, sorted: true })
     write(page.vector)
+    const end = Date.now()
+    return { start, end }
  }
 
   let i = 0
   console.log({range, iterations})
   while (i < iterations) {
     i++
-    const start = Date.now()
-    await insert(encRange(range), [])
-    const end = Date.now()
+    const { start, end } = await insert(encRange(range), [])
     console.log(`range(${ range }) insert at ${ Math.floor(range / ( end - start ) * 1000) }p/s`)
   }
 }
