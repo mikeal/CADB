@@ -425,8 +425,8 @@ class Branch extends Node {
     }
     if (!last) throw new Error('Not found')
     const _node = parsedRead(read, last.pos, last.length, cache)
-    if (_node.then) return _node.then(node => node.get(digest, read))
-    return _node.get(digest, read)
+    if (_node.then) return _node.then(node => node.get(digest, read, cache))
+    return _node.get(digest, read, cache)
   }
 
   range (start, end, read, cache) {
