@@ -1,7 +1,9 @@
 import { Page, Node, Entry, Leaf, Branch, sortBatch, compaction, compare } from '../src/types.js'
 import { deepStrictEqual as same } from 'assert'
 import { full as inmem } from '../src/cache.js'
+import cadb from '../src/index.js'
 import crypto from 'crypto'
+import tempfile from 'tempfile'
 
 const encRange = (num, size=8) => [...Array(num).keys()].map(() => crypto.randomBytes(size))
 
@@ -83,13 +85,31 @@ const mutations = async (range, iterations) => {
   }
 }
 
+const fileMutations = async (range, iterations) => {
+  const f = tempfile('.cadb')
+  const data = encRange(1, 1024)[0]
+  let i = 0
+  while (i < iterations) {
+    const node = cadb(f)
+    const batch = encRange(range, 32).map(digest => ({ put: { digest, data } }))
+    const start = Date.now()
+    await node.batch(batch)
+    const end = Date.now()
+    console.log(`range(${ range }) insert at ${ Math.floor(range / ( end - start ) * 1000) }p/s`)
+  }
+}
+
 const run = async () => {
   /*
   await create(1000 * 10, 32)
   await create(1000 * 20, 32)
   await create(1000 * 100, 32)
   await create(1000 * 1000, 32)
-  */
+
   await mutations(100000, 40)
+
+  */
+
+  await fileMutations(100000, 10000)
 }
 run()
