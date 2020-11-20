@@ -47,8 +47,6 @@ const mutex = filename => {
     return data
   }
 
-  // await writev(writer, vector, start)
-
   const put = async (digest, data) => {
     const batch = [ { put: { digest, data } } ]
     let page
@@ -64,7 +62,21 @@ const mutex = filename => {
     root = page.root
   }
 
-  return { getSize: () => size, put, get }
+  const batch = async (batch) => {
+    let page
+    if (!root) {
+      page = await Page.create(batch)
+    } else {
+      const opts = { batch, cursor: size, root, read: _read, cache: cache.cache }
+      page = await Page.transaction(opts)
+    }
+    const vector = page.encode()
+    await writev(writer, vector, size)
+    size = page.pos + page.size
+    root = page.root
+  }
+
+  return { getSize: () => size, put, get, batch }
 }
 
 export default mutex

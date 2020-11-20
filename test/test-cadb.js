@@ -16,4 +16,15 @@ export default async test => {
     const data2 = await node.get(digest)
     same(data, data2)
   })
+  test('batch', async test => {
+    const f = tempfile('.cadb')
+    // test.after(() => rm(f))
+    const node = cadb(f)
+    const data = encRange(1)[0]
+    const batch = encRange(100).map(digest => ({ put: { digest, data } }))
+    await node.batch(batch)
+    for (const { put: { digest } } of batch) {
+      same(data, await node.get(digest))
+    }
+  })
 }
