@@ -15,12 +15,6 @@ const slicer = chunk => (start, end) => {
   }
 }
 
-// It's always faster to read numbers from their TypedArray
-// but you can only read them out of properly aligned memory
-// which is unpredictable. You can read them with DataView
-// when they are unaligned, which is slower, but still faster
-// than doing a memcopy
-
 const uint32 = b => {
   if (b.shallowSlice) b = b.slice()
   return Buffer.from(b.buffer, b.byteOffset, b.byteLength).readUint32LE()
@@ -144,7 +138,7 @@ const _parsedRead = (node, pos, length, cache) => {
 
 const parsedRead = (read, pos, length, cache) => {
   const node = read(pos, length)
-  if (node.then) return node.then(n => _parsedRead(node, pos, length, cache))
+  if (node.then) return node.then(n => _parsedRead(n, pos, length, cache))
   else return _parsedRead(node, pos, length, cache)
 }
 
@@ -542,6 +536,10 @@ class Page {
     this.size = size
     this.root = root
     this.pos = pos
+  }
+
+  encode () {
+    return this.vector.map(b => b.encode ? b.encode() : b).flat()
   }
 
   static async transaction ({ batch, cursor, root, read, cache, sorted }) {
