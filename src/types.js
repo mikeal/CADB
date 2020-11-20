@@ -185,6 +185,10 @@ class Node {
     }
   }
 
+  static create (read, pos, length, cache) {
+    return parsedRead(read, pos, length, cache)
+  }
+
   static async load (read, size, cache) {
     size = BigInt(size)
     const chunk = await read(size - 12n, 12)

@@ -1,6 +1,6 @@
 import { writev as _writev, openSync, read as _read, statSync, readSync, readFileSync } from 'fs'
 import { promisify } from 'util'
-import { Page } from './types.js'
+import { Page, Node } from './types.js'
 import { full } from './cache.js'
 
 import crypto from 'crypto'
@@ -32,16 +32,19 @@ const mutex = filename => {
     root = [uint64(buffer.slice(0, 8)), uint32(buffer.slice(8))]
   }
 
-  const get = async digest => {
-    if (!root) throw new Error('Cannot read empty database')
-  }
-
   const cache = full()
 
   const _read = async (pos, length) => {
     const buffer = Buffer.allocUnsafe(length)
     await read(reader, buffer, 0, length, Number(pos))
     return buffer
+  }
+
+  const get = async digest => {
+    if (!root) throw new Error('Cannot read empty database')
+    const node = await Node.create(_read, ...root, cache.cache)
+    const data = await node.get(digest, _read, cache.cache)
+    return data
   }
 
   // await writev(writer, vector, start)
@@ -61,14 +64,7 @@ const mutex = filename => {
     root = page.root
   }
 
-  return { getSize: () => size, put }
+  return { getSize: () => size, put, get }
 }
-
-const run = async () => {
-  const test = mutex('test.cadb')
-  const [ digest, data ] = encRange(2)
-  await test.put(digest, data)
-}
-run()
 
 export default mutex

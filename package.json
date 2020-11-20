@@ -4,7 +4,8 @@
   },
   "devDependencies": {
     "estest": "^10.3.6",
-    "standard": "^16.0.1"
+    "standard": "^16.0.1",
+    "tempfile": "^3.0.0"
   },
   "name": "CADB",
   "description": "Experimental single file content addressed database.",
